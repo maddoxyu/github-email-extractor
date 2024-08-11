@@ -13,7 +13,7 @@ pnpm create plasmo
 
 Then, create a new file within called content.tsx and update package.json. 
 
-##Running the Extension
+## Running the Extension
 
 In Windows Powershell:
 ```
