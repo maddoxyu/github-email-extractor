@@ -2,7 +2,7 @@
 
 Basic Plasmo assets and Node Modules have been ignored as they remain the same towards the default provided by Plasmo. 
 
-You can choose to download only content.tsx and package.json while downloading the rest of the Plasmo extensions needed externally as such:
+You can choose to download only content.tsx, background.ts, manifest.json, and package.json while downloading the rest of the Plasmo extensions needed externally as such:
 
 Installing Plasmo and creating a project:
 
