@@ -1,69 +1,69 @@
 import { type PlasmoCSConfig } from "plasmo"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 
 export const config: PlasmoCSConfig = {
   matches: ["https://github.com/*"]
 }
 
 const GitHubEmailExtractor = () => {
-  const [emails, setEmails] = useState([])
+  const [emails, setEmails] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState("")
 
-  useEffect(() => {
-    const extractEmails = async () => {
-      setIsLoading(true)
-      setError(null)
-      setEmails([]) 
+  const extractEmails = useCallback(async () => {
+    setIsLoading(true)
+    setError(null)
+    setEmails([])
 
-      try {
-        let extractedEmails = await processCurrentPage()
-        setEmails([...new Set(extractedEmails)])
-      } catch (err) {
-        setError(`Failed to extract emails: ${err.message}`)
-      } finally {
-        setIsLoading(false)
-        setProgress("")
-      }
+    try {
+      const extractedEmails = await processCurrentPage()
+      setEmails([...new Set(extractedEmails)])
+    } catch (err) {
+      setError(`Failed to extract emails: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setIsLoading(false)
+      setProgress("")
     }
+  }, [])
 
-    const messageListener = (message, sender, sendResponse) => {
+  useEffect(() => {
+    const messageListener = (message: { action: string }) => {
       if (message.action === "pageChanged") {
         extractEmails()
       }
     }
 
     chrome.runtime.onMessage.addListener(messageListener)
-
     extractEmails()
 
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener)
     }
-  }, [])
+  }, [extractEmails])
 
-  const processCurrentPage = async () => {
+  const processCurrentPage = async (): Promise<string[]> => {
     const pathParts = window.location.pathname.split('/').filter(Boolean)
     
-    if (pathParts.length === 0) { //main pg
-      return []
-    } else if (pathParts.length === 1) { //pfp pg
-      return await handleUserProfile()
-    } else if (pathParts.length === 2) { //repo pg
-      return await handleRepoPage()
-    } else if (pathParts.includes('commit')) { //commit pg
-      return await handleCommitPage()
-    } else if (pathParts.includes('commits')) { //commits pg
-      return await handleCommitsPage()
-    } else if (window.location.href.endsWith('.patch')) { //patch pg
-      return await handlePatchPage()
+    switch (true) {
+      case pathParts.length === 0:
+        return [] // main page
+      case pathParts.length === 1:
+        return handleUserProfile() // profile page
+      case pathParts.length === 2:
+        return handleRepoPage() // repository page
+      case pathParts.includes('commit'):
+        return handleCommitPage() // commit page
+      case pathParts.includes('commits'):
+        return handleCommitsPage() // commits page
+      case window.location.href.endsWith('.patch'):
+        return handlePatchPage() // patch page
+      default:
+        return []
     }
-    
-    return []
   }
 
-  const handleUserProfile = async () => {
+  const handleUserProfile = async (): Promise<string[]> => {
     setProgress("Scanning repositories...")
     const repos = findRepos(document)
     const repo = repos[Math.floor(Math.random() * repos.length)]
@@ -71,25 +71,25 @@ const GitHubEmailExtractor = () => {
     return processCommitPages(`${repo}/commits`)
   }
 
-  const handleRepoPage = async () => {
+  const handleRepoPage = async (): Promise<string[]> => {
     setProgress("Analyzing repository...")
     return processCommitPages(`${window.location.href}/commits`)
   }
 
-  const handleCommitPage = async () => {
+  const handleCommitPage = async (): Promise<string[]> => {
     return extractEmailsFromPatch(`${window.location.href}.patch`)
   }
 
-  const handleCommitsPage = async () => {
+  const handleCommitsPage = async (): Promise<string[]> => {
     return processCommitPages(window.location.href)
   }
 
-  const handlePatchPage = async () => {
+  const handlePatchPage = async (): Promise<string[]> => {
     return extractEmailsFromPatch(window.location.href)
   }
 
-  const processCommitPages = async (startUrl) => {
-    let emails = []
+  const processCommitPages = async (startUrl: string): Promise<string[]> => {
+    let emails: string[] = []
     let currentPage = startUrl
     for (let i = 0; i < 3 && currentPage; i++) {
       setProgress(`Processing page ${i + 1}`)
@@ -101,56 +101,52 @@ const GitHubEmailExtractor = () => {
     return emails
   }
 
-  const extractEmailsFromCommitPage = async (url) => {
+  const extractEmailsFromCommitPage = async (url: string): Promise<{ foundEmails: string[], nextPage: string | null }> => {
     const response = await fetch(url)
     const html = await response.text()
     const doc = new DOMParser().parseFromString(html, 'text/html')
     
-    const commitLinks = [...doc.querySelectorAll('a')]
+    const commitLinks = Array.from(doc.querySelectorAll('a'))
       .filter(a => a.href.match(/\/commit\/[a-f0-9]{40}/))
       .map(a => `${new URL(a.href).href}.patch`)
     
     const emails = (await Promise.all(commitLinks.map(extractEmailsFromPatch))).flat()
     const nextLink = doc.querySelector('.pagination a[rel="next"]') as HTMLAnchorElement | null
     
-    return { foundEmails: emails, nextPage: nextLink?.href }
+    return { foundEmails: emails, nextPage: nextLink?.href || null }
   }
 
-  const extractEmailsFromPatch = async (url) => {
+  const extractEmailsFromPatch = async (url: string): Promise<string[]> => {
     try {
       const response = await fetch(url)
       const text = await response.text()
       const emailRegex = /\S+@\S+\.\S+/g
       const matches = text.match(emailRegex) || []
       
-      const filteredEmails = matches.filter(email => {
-        const [localPart, domain] = email.split('@')
-        const isValidDomain = domain && domain.includes('.') && !/\d/.test(domain.split('.').pop() || '')
-        const isNotPackageVersion = !/^[\w.-]+@\d+\.\d+\.\d+(-\w+(\.\d+)?)?$/.test(email)
-        const isNotDevPattern = !/^(core|helpers|lodash|postcss|react(-dom)?|compiler-\w+|prettier|remapping|code-frame|compat-data)@/.test(email)
-        return isValidDomain && isNotPackageVersion && isNotDevPattern
-      }).map(email => {
-        if (email.endsWith('@users.noreply.github.com')) {
-          return email.replace(/^\d+\+/, '')
-        }
-        return email
-      })
-      
-      return [...new Set(filteredEmails)]
+      return [...new Set(matches
+        .filter(email => {
+          const [localPart, domain] = email.split('@')
+          const isValidDomain = domain && domain.includes('.') && !/\d/.test(domain.split('.').pop() || '')
+          const isNotPackageVersion = !/^[\w.-]+@\d+\.\d+\.\d+(-\w+(\.\d+)?)?$/.test(email)
+          const isNotDevPattern = !/^(core|helpers|lodash|postcss|react(-dom)?|compiler-\w+|prettier|remapping|code-frame|compat-data)@/.test(email)
+          return isValidDomain && isNotPackageVersion && isNotDevPattern
+        })
+        .map(email => email.endsWith('@users.noreply.github.com') ? email.replace(/^\d+\+/, '') : email)
+      )]
     } catch (err) {
       console.error(`Failed to fetch ${url}:`, err)
       return []
     }
   }
 
-  const findRepos = (doc) => {
+  const findRepos = (doc: Document): string[] => {
     const repoSelectors = [
       'a[itemprop="name codeRepository"]',
       'a[data-hovercard-type="repository"]',
       'a.text-bold[href^="/"]'
     ]
-    return [...doc.querySelectorAll(repoSelectors.join(','))]
-      .map(a => a.href)
+    return Array.from(doc.querySelectorAll(repoSelectors.join(',')))
+      .map(a => (a as HTMLAnchorElement).href)
       .filter(href => href.split('/').length === 5)
   }
 
